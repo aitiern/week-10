@@ -9,18 +9,49 @@
 #      strings (in the style of desc_3). Uses model_3 (TF-IDF + LinearRegression).
 # ------------------------------------------------------------
 
+import pickle as _pickle
 import numpy as _np
 import pandas as _pd
-from pathlib import Path as _Path
 
-# Reuse the same mapping helpers from above (they will exist when this file is saved as its own module).
-# If you keep apputil.py as a separate file, copy the mapping code there as-is.
+# --- Duplicate the roast mapping helpers so apputil.py is standalone ---
+_ROAST_ORDER = [
+    "very light",
+    "light",
+    "light-medium",
+    "medium-light",
+    "medium",
+    "medium-dark",
+    "dark",
+    "very dark",
+]
+_ROAST_INDEX = {name: i for i, name in enumerate(_ROAST_ORDER, start=0)}
 
+def _normalize_roast(val):
+    import numpy as _np  # local import to keep this file self-contained
+    if val is None or (isinstance(val, float) and _np.isnan(val)):
+        return None
+    if not isinstance(val, str):
+        val = str(val)
+    s = val.strip().lower()
+    s = s.replace(" ", "-").replace("_", "-")
+    s = s.replace("lightmedium", "light-medium")
+    s = s.replace("mediumlight", "medium-light")
+    s = s.replace("mediumdark", "medium-dark")
+    return s
+
+def roast_category(val):
+    s = _normalize_roast(val)
+    if s is None:
+        return _np.nan
+    return float(_ROAST_INDEX.get(s, _np.nan))
+
+# --- IO helpers ---
 
 def _load_pickle(path: str):
     with open(path, "rb") as f:
-        return pickle.load(f)
+        return _pickle.load(f)
 
+# --- Public API ---
 
 def predict_rating(X, text: bool = False):
     """Predict ratings using the saved models.
@@ -55,8 +86,8 @@ def predict_rating(X, text: bool = False):
         else:
             texts = _np.asarray(X, dtype=str)
 
-        Xvec = vectorizer.transform(texts)
-        Xdense = Xvec.toarray()  # match training path
+        Xvec = vectorizer.transform(texts)  # unseen words ignored by TF-IDF
+        Xdense = Xvec.toarray()             # match training path
         return model.predict(Xdense)
 
     # Tabular mode (Bonus 3)
@@ -95,4 +126,5 @@ def predict_rating(X, text: bool = False):
         y_pred[(~use_tree).values] = lr.predict(X_lin)
 
     return y_pred
+
 
