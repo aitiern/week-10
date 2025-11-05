@@ -1,130 +1,45 @@
 # ------------------------------------------------------------
-# apputil.py  (Bonus Exercise 3 & 4 helper)
-# ------------------------------------------------------------
-# Provides a `predict_rating` function with two modes:
-#   1) Tabular mode: df_X with columns ["100g_USD", "roast" (text)]
-#      - If roast is known (seen category), use model_2 (tree) on both features
-#      - Else, fall back to model_1 (linear) using only 100g_USD
-#   2) Text mode: predict_rating(X, text=True) where X is an array-like of
-#      strings (in the style of desc_3). Uses model_3 (TF-IDF + LinearRegression).
+# apputil.py — Bonus utility for model predictions
 # ------------------------------------------------------------
 
-import pickle as _pickle
-import numpy as _np
-import pandas as _pd
+import pickle
+import numpy as np
+import pandas as pd
 
-# --- Duplicate the roast mapping helpers so apputil.py is standalone ---
+# roast mapping
 _ROAST_ORDER = [
-    "very light",
-    "light",
-    "light-medium",
-    "medium-light",
-    "medium",
-    "medium-dark",
-    "dark",
-    "very dark",
+    "very light", "light", "light-medium", "medium-light",
+    "medium", "medium-dark", "dark", "very dark"
 ]
 _ROAST_INDEX = {name: i for i, name in enumerate(_ROAST_ORDER, start=0)}
 
-def _normalize_roast(val):
-    import numpy as _np  # local import to keep this file self-contained
-    if val is None or (isinstance(val, float) and _np.isnan(val)):
-        return None
-    if not isinstance(val, str):
-        val = str(val)
-    s = val.strip().lower()
-    s = s.replace(" ", "-").replace("_", "-")
-    s = s.replace("lightmedium", "light-medium")
-    s = s.replace("mediumlight", "medium-light")
-    s = s.replace("mediumdark", "medium-dark")
-    return s
+def roast_category(val: str) -> float:
+    val = str(val).strip().lower().replace(" ", "-")
+    return float(_ROAST_INDEX.get(val, np.nan))
 
-def roast_category(val):
-    s = _normalize_roast(val)
-    if s is None:
-        return _np.nan
-    return float(_ROAST_INDEX.get(s, _np.nan))
-
-# --- IO helpers ---
-
-def _load_pickle(path: str):
+# load models
+def load_pickle(path):
     with open(path, "rb") as f:
-        return _pickle.load(f)
+        return pickle.load(f)
 
-# --- Public API ---
-
-def predict_rating(X, text: bool = False):
-    """Predict ratings using the saved models.
-
-    Parameters
-    ----------
-    X :
-        - If text == False: a pandas.DataFrame with columns ["100g_USD", "roast"]
-          (roast may be missing or unseen; we will fall back to model_1 as needed).
-        - If text == True: array-like of strings (or a DataFrame/Series with one text column).
-    text : bool, default False
-        When True, use the text-only model (model_3.pickle) on input strings.
-
-    Returns
-    -------
-    numpy.ndarray of predicted ratings
-    """
+def predict_rating(df, text=False):
     if text:
-        # Text mode (Bonus 4)
-        art = _load_pickle("model_3.pickle")
-        vectorizer = art["vectorizer"]
-        model = art["model"]
+        art = load_pickle("model_3.pickle")
+        X = art["vectorizer"].transform(df["text"]).toarray()
+        return art["model"].predict(X)
 
-        # Normalize X to a 1D array of strings
-        if isinstance(X, _pd.DataFrame):
-            if X.shape[1] == 1:
-                texts = X.iloc[:, 0].astype(str).fillna("").values
-            else:
-                raise ValueError("For text=True, pass a single-column DataFrame or a 1D array of strings.")
-        elif isinstance(X, _pd.Series):
-            texts = X.astype(str).fillna("").values
-        else:
-            texts = _np.asarray(X, dtype=str)
+    lr = load_pickle("model_1.pickle")
+    tree = load_pickle("model_2.pickle")
+    df["roast_cat"] = df["roast"].apply(roast_category)
+    mask = ~df["roast_cat"].isna()
 
-        Xvec = vectorizer.transform(texts)  # unseen words ignored by TF-IDF
-        Xdense = Xvec.toarray()             # match training path
-        return model.predict(Xdense)
+    y = np.zeros(len(df))
+    if mask.any():
+        X_tree = df.loc[mask, ["100g_USD", "roast_cat"]]
+        y[mask] = tree.predict(X_tree)
+    if (~mask).any():
+        y[~mask] = lr.predict(df.loc[~mask, ["100g_USD"]])
+    return y
 
-    # Tabular mode (Bonus 3)
-    if not isinstance(X, _pd.DataFrame):
-        raise ValueError("For tabular mode, X must be a pandas DataFrame with columns ['100g_USD', 'roast'].")
-
-    if "100g_USD" not in X.columns or "roast" not in X.columns:
-        raise ValueError("X must have columns ['100g_USD', 'roast'] in tabular mode.")
-
-    # Load both models
-    lr = _load_pickle("model_1.pickle")  # LinearRegression on price only
-    art2 = _load_pickle("model_2.pickle")  # tree artifact
-    dtr = art2["model"]
-    sentinel = art2.get("sentinel", 9_999.0)
-
-    # Compute roast_cat with the same mapping used in training
-    X = X.copy()
-    X["roast_cat"] = X["roast"].apply(roast_category)
-
-    # Determine which rows use model_2 (known roast) vs model_1 (fallback)
-    use_tree = ~X["roast_cat"].isna()
-
-    # Prepare outputs
-    y_pred = _np.empty(len(X), dtype=float)
-
-    # Tree predictions where roast is known
-    if use_tree.any():
-        X_tree = X.loc[use_tree, ["100g_USD", "roast_cat"]].values
-        # Replace NaN with sentinel for consistency with training
-        X_tree = _np.where(_np.isnan(X_tree), sentinel, X_tree)
-        y_pred[use_tree.values] = dtr.predict(X_tree)
-
-    # Linear predictions fallback
-    if (~use_tree).any():
-        X_lin = X.loc[~use_tree, ["100g_USD"]].values
-        y_pred[(~use_tree).values] = lr.predict(X_lin)
-
-    return y_pred
 
 
